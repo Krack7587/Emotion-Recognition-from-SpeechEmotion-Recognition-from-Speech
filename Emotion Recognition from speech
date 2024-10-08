@@ -1,0 +1,632 @@
+
+#IMPORT THE LIBRARIES
+import pandas as pd
+import numpy as np
+
+import os
+import sys
+
+# librosa is a Python library for analyzing audio and music. It can be used to extract the data from the audio files we will see it later.
+import librosa
+import librosa.display
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.metrics import confusion_matrix, classification_report
+from sklearn.model_selection import train_test_split
+
+# to play the audio files
+import IPython.display as ipd
+from IPython.display import Audio
+import keras
+from keras.preprocessing import sequence
+from keras.models import Sequential
+from keras.layers import Dense, Embedding
+from keras.layers import LSTM,BatchNormalization , GRU
+from keras.preprocessing.text import Tokenizer
+from keras.preprocessing.sequence import pad_sequences
+from tensorflow.keras.utils import to_categorical
+from keras.layers import Input, Flatten, Dropout, Activation
+from keras.layers import Conv1D, MaxPooling1D, AveragePooling1D
+from keras.models import Model
+from keras.callbacks import ModelCheckpoint
+from tensorflow.keras.optimizers import SGD
+
+
+
+import warnings
+if not sys.warnoptions:
+    warnings.simplefilter("ignore")
+warnings.filterwarnings("ignore", category=DeprecationWarning) 
+import tensorflow as tf 
+print ("Done")
+
+
+
+
+
+
+#preparing data set
+
+ravdess = "/kaggle/input/ravdess-emotional-speech-audio/audio_speech_actors_01-24/"
+ravdess_directory_list = os.listdir(ravdess)
+ravdess_directory_list.sort()
+print(ravdess_directory_list)
+
+
+
+len(ravdess_directory_list)
+
+file_emotion = []
+file_path = []
+for i in ravdess_directory_list:
+    # as their are 24 different actors in our previous directory we need to extract files for each actor.
+    actor = os.listdir(ravdess + i)
+    for f in actor:
+        part = f.split('.')[0].split('-')
+    # third part in each file represents the emotion associated to that file.
+        file_emotion.append(int(part[2]))
+        file_path.append(ravdess + i + '/' + f)
+
+print(actor[0])
+print(part[0])
+print(file_path[0])
+print(int(part[2]))
+print(f)
+
+# dataframe for emotion of files
+emotion_df = pd.DataFrame(file_emotion, columns=['Emotions'])
+# dataframe for path of files.
+path_df = pd.DataFrame(file_path, columns=['Path'])
+ravdess_df = pd.concat([emotion_df, path_df], axis=1)
+# changing integers to actual emotions.
+ravdess_df.Emotions.replace({1:'neutral', 2:'neutral', 3:'happy', 4:'sad', 5:'angry', 6:'fear', 7:'disgust',
+                             8:'surprise'},
+                            inplace=True)
+print(ravdess_df.head())
+print("______________________________________________")
+print(ravdess_df.tail())
+print("_______________________________________________")
+print(ravdess_df.Emotions.value_counts())
+
+
+data_path = ravdess_df
+data_path.to_csv("data_path.csv",index=False)
+data_path.head()
+
+print(data_path.Emotions.value_counts())
+
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+plt.title('Count of Emotions', size=16)
+sns.countplot(data_path.Emotions)
+plt.ylabel('Count', size=12)
+plt.xlabel('Emotions', size=12)
+sns.despine(top=True, right=True, left=False, bottom=False)
+plt.show()
+
+data,sr = librosa.load(file_path[0])
+sr
+
+ipd.Audio(data,rate=sr)
+
+# CREATE LOG MEL SPECTROGRAM
+plt.figure(figsize=(10, 5))
+spectrogram = librosa.feature.melspectrogram(y=data, sr=sr, n_mels=128,fmax=8000) 
+log_spectrogram = librosa.power_to_db(spectrogram)
+librosa.display.specshow(log_spectrogram, y_axis='mel', sr=sr, x_axis='time');
+plt.title('Mel Spectrogram ')
+plt.colorbar(format='%+2.0f dB')
+
+mfcc = librosa.feature.mfcc(y=data, sr=sr, n_mfcc=30)
+
+
+# MFCC
+plt.figure(figsize=(16, 10))
+plt.subplot(3,1,1)
+librosa.display.specshow(mfcc, x_axis='time')
+plt.ylabel('MFCC')
+plt.colorbar()
+
+ipd.Audio(data,rate=sr)
+
+# NOISE
+def noise(data):
+    noise_amp = 0.035*np.random.uniform()*np.amax(data)
+    data = data + noise_amp*np.random.normal(size=data.shape[0])
+    return data
+
+# STRETCH
+def stretch(data, rate=0.8):
+    return librosa.effects.time_stretch(data, rate)
+# SHIFT
+def shift(data):
+    shift_range = int(np.random.uniform(low=-5, high = 5)*1000)
+    return np.roll(data, shift_range)
+# PITCH
+def pitch(data, sampling_rate, pitch_factor=0.7):
+    return librosa.effects.pitch_shift(data, sampling_rate, pitch_factor)
+
+# NORMAL AUDIO
+
+
+import librosa.display
+plt.figure(figsize=(12, 5))
+librosa.display.waveshow(y=data, sr=sr)
+ipd.Audio(data,rate=sr)
+
+# AUDIO WITH NOISE
+x = noise(data)
+plt.figure(figsize=(12,5))
+librosa.display.waveshow(y=x, sr=sr)
+ipd.Audio(x, rate=sr)
+
+# STRETCHED AUDIO
+x = stretch(data)
+plt.figure(figsize=(12, 5))
+librosa.display.waveshow(y=x, sr=sr)
+ipd.Audio(x, rate=sr)
+
+# SHIFTED AUDIO
+x = shift(data)
+plt.figure(figsize=(12,5))
+librosa.display.waveshow(y=x, sr=sr)
+ipd.Audio(x, rate=sr)
+
+# AUDIO WITH PITCH
+x = pitch(data, sr)
+plt.figure(figsize=(12, 5))
+librosa.display.waveshow(y=x, sr=sr)
+ipd.Audio(x, rate=sr)
+
+def zcr(data,frame_length,hop_length):
+    zcr=librosa.feature.zero_crossing_rate(data,frame_length=frame_length,hop_length=hop_length)
+    return np.squeeze(zcr)
+def rmse(data,frame_length=2048,hop_length=512):
+    rmse=librosa.feature.rms(data,frame_length=frame_length,hop_length=hop_length)
+    return np.squeeze(rmse)
+def mfcc(data,sr,frame_length=2048,hop_length=512,flatten:bool=True):
+    mfcc=librosa.feature.mfcc(data,sr=sr)
+    return np.squeeze(mfcc.T)if not flatten else np.ravel(mfcc.T)
+
+def extract_features(data,sr=22050,frame_length=2048,hop_length=512):
+    result=np.array([])
+    
+    result=np.hstack((result,
+                      zcr(data,frame_length,hop_length),
+                      rmse(data,frame_length,hop_length),
+                      mfcc(data,sr,frame_length,hop_length)
+                     ))
+    return result
+
+def get_features(path,duration=2.5, offset=0.6):
+    data,sr=librosa.load(path,duration=duration,offset=offset)
+    aud=extract_features(data)
+    audio=np.array(aud)
+    
+    noised_audio=noise(data)
+    aud2=extract_features(noised_audio)
+    audio=np.vstack((audio,aud2))
+    
+    pitched_audio=pitch(data,sr)
+    aud3=extract_features(pitched_audio)
+    audio=np.vstack((audio,aud3))
+    
+    pitched_audio1=pitch(data,sr)
+    pitched_noised_audio=noise(pitched_audio1)
+    aud4=extract_features(pitched_noised_audio)
+    audio=np.vstack((audio,aud4))
+    
+    return audio
+
+
+import multiprocessing as mp
+print("Number of processors: ", mp.cpu_count())
+
+import timeit
+from tqdm import tqdm
+start = timeit.default_timer()
+X,Y=[],[]
+for path,emotion,index in tqdm (zip(data_path.Path,data_path.Emotions,range(data_path.Path.shape[0]))):
+    features=get_features(path)
+    if index == 100:
+        print(f'{index} audio has been processed')
+        break
+    for i in features:
+        X.append(i)
+        Y.append(emotion)
+print('Done')
+stop = timeit.default_timer()
+
+print('Time: ', stop - start)         
+
+len(X), len(Y), data_path.Path.shape
+
+Emotions = pd.DataFrame(X)
+Emotions['Emotions'] = Y
+Emotions.to_csv('emotion.csv', index=False)
+Emotions.head()
+
+Emotions = pd.read_csv('./emotion.csv')
+Emotions.head()
+
+print(Emotions.isna().any())
+
+Emotions=Emotions.fillna(0)
+print(Emotions.isna().any())
+Emotions.shape
+
+np.sum(Emotions.isna())
+
+#taking all rows and all cols without last col for X which include features
+#taking last col for Y, which include the emotions
+
+
+X = Emotions.iloc[: ,:-1].values
+Y = Emotions['Emotions'].values
+
+# As this is a multiclass classification problem onehotencoding our Y
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+encoder = OneHotEncoder()
+Y = encoder.fit_transform(np.array(Y).reshape(-1,1)).toarray()
+
+print(Y.shape)
+
+X.shape
+
+from sklearn.model_selection import train_test_split
+
+x_train, x_test, y_train, y_test = train_test_split(X, Y, random_state=42,test_size=0.2, shuffle=True)
+x_train.shape, y_train.shape, x_test.shape, y_test.shape
+
+#reshape for lstm
+X_train = x_train.reshape(x_train.shape[0] , x_train.shape[1] , 1)
+X_test = x_test.reshape(x_test.shape[0] , x_test.shape[1] , 1)
+
+# scaling our data with sklearn's Standard scaler
+scaler = StandardScaler()
+x_train = scaler.fit_transform(x_train)
+x_test = scaler.transform(x_test)
+x_train.shape, y_train.shape, x_test.shape, y_test.shape
+
+import keras
+from keras.preprocessing import sequence
+from keras.models import Sequential
+from keras.layers import Dense, Embedding
+from keras.layers import LSTM,BatchNormalization , GRU
+from keras.preprocessing.text import Tokenizer
+from keras.preprocessing.sequence import pad_sequences
+from tensorflow.keras.utils import to_categorical
+from keras.layers import Input, Flatten, Dropout, Activation
+from keras.layers import Conv1D, MaxPooling1D, AveragePooling1D
+from keras.models import Model
+from keras.callbacks import ModelCheckpoint
+from tensorflow.keras.optimizers import SGD
+
+from keras.callbacks import ModelCheckpoint, EarlyStopping,ReduceLROnPlateau
+model_checkpoint = ModelCheckpoint('best_model1_weights.h5', monitor='val_accuracy', save_best_only=True)
+
+
+early_stop=EarlyStopping(monitor='val_acc',mode='auto',patience=5,restore_best_weights=True)
+lr_reduction=ReduceLROnPlateau(monitor='val_acc',patience=3,verbose=1,factor=0.5,min_lr=0.00001)
+
+model01=Sequential()
+model01.add(LSTM(128,return_sequences=True,input_shape=(x_train.shape[1],1)))
+model01.add(Dropout(0.2))
+model01.add(LSTM(128,return_sequences=True))
+#model01.add(Dropout(0.2))
+model01.add(LSTM(128,return_sequences=True))
+#model01.add(Dropout(0.2))
+model01.add(LSTM(128,return_sequences=True))
+#model01.add(Dropout(0.2))
+model01.add(LSTM(128,return_sequences=True))
+#model01.add(Dropout(0.2))
+model01.add(LSTM(128,return_sequences=True))
+#model01.add(Dropout(0.3))
+model01.add(LSTM(128))
+#model01.add(Dropout(0.3))
+model01.add(Dense(7,activation = 'softmax'))
+model01.compile(loss='categorical_crossentropy',optimizer='adam',metrics=['accuracy'])
+model01.summary()
+
+hist=model01.fit(X_train, y_train,
+                 epochs=20,
+                validation_data=(X_test, y_test),batch_size=64,
+                verbose=1)
+
+print("Accuracy of our model on test data : " , model01.evaluate(X_test,y_test)[1]*100 , "%")
+epochs = [i for i in range(20)]
+fig , ax = plt.subplots(1,2)
+train_acc = hist.history['accuracy']
+train_loss = hist.history['loss']
+test_acc = hist.history['val_accuracy']
+test_loss = hist.history['val_loss']
+
+fig.set_size_inches(20,6)
+ax[0].plot(epochs , train_loss , label = 'Training Loss')
+ax[0].plot(epochs , test_loss , label = 'Testing Loss')
+ax[0].set_title('Training & Testing Loss')
+ax[0].legend()
+ax[0].set_xlabel("Epochs")
+
+ax[1].plot(epochs , train_acc , label = 'Training Accuracy')
+ax[1].plot(epochs , test_acc , label = 'Testing Accuracy')
+ax[1].set_title('Training & Testing Accuracy')
+ax[1].legend()
+ax[1].set_xlabel("Epochs")
+plt.show()
+
+#Reshape for CNN MODEL
+
+x_traincnn =np.expand_dims(x_train, axis=2)
+x_testcnn= np.expand_dims(x_test, axis=2)
+x_traincnn.shape, y_train.shape, x_testcnn.shape, y_test.shape
+#x_testcnn[0]
+
+import tensorflow.keras.layers as L
+
+model = tf.keras.Sequential([
+    L.Conv1D(512,kernel_size=5, strides=1,padding='same', activation='relu',input_shape=(X_train.shape[1],1)),
+    L.BatchNormalization(),
+    L.MaxPool1D(pool_size=5,strides=2,padding='same'),
+    
+    L.Conv1D(512,kernel_size=5,strides=1,padding='same',activation='relu'),
+    L.BatchNormalization(),
+    L.MaxPool1D(pool_size=5,strides=2,padding='same'),
+    Dropout(0.2),  # Add dropout layer after the second max pooling layer
+    
+    L.Conv1D(256,kernel_size=5,strides=1,padding='same',activation='relu'),
+    L.BatchNormalization(),
+    L.MaxPool1D(pool_size=5,strides=2,padding='same'),
+    
+    L.Conv1D(256,kernel_size=3,strides=1,padding='same',activation='relu'),
+    L.BatchNormalization(),
+    L.MaxPool1D(pool_size=5,strides=2,padding='same'),
+    Dropout(0.2),  # Add dropout layer after the fourth max pooling layer
+    
+    L.Conv1D(128,kernel_size=3,strides=1,padding='same',activation='relu'),
+    L.BatchNormalization(),
+    L.MaxPool1D(pool_size=3,strides=2,padding='same'),
+    Dropout(0.2),  # Add dropout layer after the fifth max pooling layer
+    
+    L.Flatten(),
+    L.Dense(512,activation='relu'),
+    L.BatchNormalization(),
+    L.Dense(7,activation='softmax')
+])
+model.compile(optimizer='adam',loss='categorical_crossentropy',metrics='accuracy')
+model.summary()
+
+history=model.fit(x_traincnn, y_train, epochs=10, validation_data=(x_testcnn, y_test), batch_size=64,callbacks=[early_stop,lr_reduction,model_checkpoint])
+
+print("Accuracy of our model on test data : " , model.evaluate(x_testcnn,y_test)[1]*100 , "%")
+
+epochs = [i for i in range(10)]
+fig , ax = plt.subplots(1,2)
+train_acc = history.history['accuracy']
+train_loss = history.history['loss']
+test_acc = history.history['val_accuracy']
+test_loss = history.history['val_loss']
+
+fig.set_size_inches(20,6)
+ax[0].plot(epochs , train_loss , label = 'Training Loss')
+ax[0].plot(epochs , test_loss , label = 'Testing Loss')
+ax[0].set_title('Training & Testing Loss')
+ax[0].legend()
+ax[0].set_xlabel("Epochs")
+
+ax[1].plot(epochs , train_acc , label = 'Training Accuracy')
+ax[1].plot(epochs , test_acc , label = 'Testing Accuracy')
+ax[1].set_title('Training & Testing Accuracy')
+ax[1].legend()
+ax[1].set_xlabel("Epochs")
+plt.show()
+
+# predicting on test data.
+pred_test0 = model.predict(x_testcnn)
+y_pred0 = encoder.inverse_transform(pred_test0)
+y_test0 = encoder.inverse_transform(y_test)
+
+# Check for random predictions
+df0 = pd.DataFrame(columns=['Predicted Labels', 'Actual Labels'])
+df0['Predicted Labels'] = y_pred0.flatten()
+df0['Actual Labels'] = y_test0.flatten()
+
+df0.head(10)
+
+df0
+
+from sklearn.metrics import confusion_matrix,classification_report
+cm = confusion_matrix(y_test0, y_pred0)
+plt.figure(figsize = (12, 10))
+cm = pd.DataFrame(cm , index = [i for i in encoder.categories_] , columns = [i for i in encoder.categories_])
+#cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+sns.heatmap(cm, linecolor='white', cmap='Blues', linewidth=1, annot=True, fmt='.2f')
+plt.title('Confusion Matrix', size=20)
+plt.xlabel('Predicted Labels', size=14)
+plt.ylabel('Actual Labels', size=14)
+plt.show()
+print(classification_report(y_test0, y_pred0))
+
+# MLP for Pima Indians Dataset Serialize to JSON and HDF5
+from tensorflow.keras.models import Sequential, model_from_json
+model.summary()
+model_json = model.to_json()
+with open("Best_model.json", "w") as json_file:
+    json_file.write(model_json)
+# serialize weights to HDF5
+model.save_weights("Best_model_weights.h5")
+print("Saved model to disk") 
+
+from tensorflow.keras.models import Sequential, model_from_json
+json_file = open('/kaggle/working/Best_model.json', 'r')
+loaded_model_json = json_file.read()
+json_file.close()
+loaded_model = model_from_json(loaded_model_json)
+# load weights into new model
+loaded_model.load_weights("/kaggle/working/Best_model_weights.h5")
+print("Loaded model from disk")
+
+loaded_model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+score = loaded_model.evaluate(x_testcnn,y_test)
+print("%s: %.2f%%" % (loaded_model.metrics_names[1], score[1]*100))
+
+# Scale the features X
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+# Load the model architecture and weights (you can modify this part as necessary)
+json_file = open('/kaggle/working/Best_model.json', 'r')
+loaded_model_json = json_file.read()
+json_file.close()
+loaded_model = model_from_json(loaded_model_json)
+
+import librosa
+
+def zcr(data,frame_length,hop_length):
+    zcr=librosa.feature.zero_crossing_rate(data,frame_length=frame_length,hop_length=hop_length)
+    return np.squeeze(zcr)
+def rmse(data,frame_length=2048,hop_length=512):
+    rmse=librosa.feature.rms(data,frame_length=frame_length,hop_length=hop_length)
+    return np.squeeze(rmse)
+def mfcc(data,sr,frame_length=2048,hop_length=512,flatten:bool=True):
+    mfcc=librosa.feature.mfcc(data,sr=sr)
+    return np.squeeze(mfcc.T)if not flatten else np.ravel(mfcc.T)
+
+def extract_features(data,sr=22050,frame_length=2048,hop_length=512):
+    result=np.array([])
+    
+    result=np.hstack((result,
+                      zcr(data,frame_length,hop_length),
+                      rmse(data,frame_length,hop_length),
+                      mfcc(data,sr,frame_length,hop_length)
+                     ))
+    return result
+
+def get_predict_feat(path):
+    data, sr = librosa.load(path, duration=2.5, offset=0.6)
+    features = extract_features(data)
+    features = np.reshape(features, newshape=(1, 2376))  # Adjust feature shape as needed
+    scaled_features = scaler.transform(features)
+    final_features = np.expand_dims(scaled_features, axis=2)
+    
+    return final_features
+
+res=get_predict_feat("/kaggle/input/ravdess-emotional-speech-audio/Actor_01/03-01-07-01-01-01-01.wav")
+print(res.shape)
+
+emotions1={1:'Neutral', 2:'Calm', 3:'Happy', 4:'Sad', 5:'Angry', 6:'Fear', 7:'Disgust',8:'Surprise'}
+def prediction(path1):
+    features = get_predict_feat(path1)
+    predictions = loaded_model.predict(features)
+    y_pred = encoder.inverse_transform(predictions)
+    print("Predicted Emotion:", y_pred[0][0])
+
+prediction("/kaggle/input/ravdess-emotional-speech-audio/Actor_02/03-01-01-01-01-01-02.wav")
+
+prediction("/kaggle/input/ravdess-emotional-speech-audio/Actor_01/03-01-01-01-01-01-01.wav")
+
+prediction("/kaggle/input/ravdess-emotional-speech-audio/Actor_01/03-01-05-01-02-02-01.wav")
+
+prediction("/kaggle/input/ravdess-emotional-speech-audio/Actor_21/03-01-04-02-02-02-21.wav")
+
+prediction("/kaggle/input/ravdess-emotional-speech-audio/Actor_02/03-01-06-01-02-02-02.wav")
+
+prediction("/kaggle/input/ravdess-emotional-speech-audio/Actor_01/03-01-08-01-01-01-01.wav")
+
+prediction("/kaggle/input/ravdess-emotional-speech-audio/Actor_01/03-01-07-01-01-01-01.wav")
+
+import numpy as np
+import pandas as pd
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.svm import SVC
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.model_selection import train_test_split
+
+# Assuming Emotions DataFrame is already available
+# Feature matrix X (without last column) and target vector Y (last column 'Emotions')
+
+# Extracting X (features) and Y (emotions)
+X = Emotions.iloc[:, :-1].values
+Y = Emotions['Emotions'].values
+
+# One-hot encoding Y
+from sklearn.preprocessing import OneHotEncoder
+encoder = OneHotEncoder()
+Y_encoded = encoder.fit_transform(np.array(Y).reshape(-1, 1)).toarray()
+
+# Train-test split
+x_train, x_test, y_train, y_test = train_test_split(X, Y_encoded, random_state=42, test_size=0.2, shuffle=True)
+
+# Flattening X for classifiers like Random Forest and SVM (which don't take 3D data like NN models)
+x_train_flat = x_train
+x_test_flat = x_test
+
+# Decoding one-hot encoded labels for classifiers
+y_train_decoded = np.argmax(y_train, axis=1)
+y_test_decoded = np.argmax(y_test, axis=1)
+
+# Scale features for SVM
+scaler = StandardScaler()
+x_train_scaled = scaler.fit_transform(x_train_flat)
+x_test_scaled = scaler.transform(x_test_flat)
+
+# Random Forest Classifier
+def build_rf_model():
+    rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
+    rf_model.fit(x_train_flat, y_train_decoded)
+    y_pred_rf = rf_model.predict(x_test_flat)
+    accuracy_rf = accuracy_score(y_test_decoded, y_pred_rf) * 100
+    return rf_model, accuracy_rf, y_pred_rf
+
+# SVM Classifier
+def build_svm_model():
+    svm_model = SVC(kernel='rbf', C=1, gamma='scale', probability=True)
+    svm_model.fit(x_train_scaled, y_train_decoded)
+    y_pred_svm = svm_model.predict(x_test_scaled)
+    accuracy_svm = accuracy_score(y_test_decoded, y_pred_svm) * 100
+    return svm_model, accuracy_svm, y_pred_svm
+
+# Build and evaluate Random Forest
+rf_model, accuracy_rf, y_pred_rf = build_rf_model()
+print(f"Random Forest accuracy: {accuracy_rf}%")
+print(f"Random Forest Classification Report:\n{classification_report(y_test_decoded, y_pred_rf)}")
+
+# Build and evaluate SVM
+svm_model, accuracy_svm, y_pred_svm = build_svm_model()
+print(f"SVM accuracy: {accuracy_svm}%")
+print(f"SVM Classification Report:\n{classification_report(y_test_decoded, y_pred_svm)}")
+
+# Visual Comparison of Models
+models = ['Random Forest', 'SVM']
+accuracies = [accuracy_rf, accuracy_svm]
+
+plt.figure(figsize=(10, 6))
+sns.barplot(x=models, y=accuracies, palette='viridis')
+plt.title("Model Accuracy Comparison (Random Forest vs SVM)")
+plt.ylabel("Accuracy (%)")
+plt.show()
+
+# Confusion Matrix for Random Forest
+plt.figure(figsize=(8, 6))
+cm_rf = confusion_matrix(y_test_decoded, y_pred_rf)
+sns.heatmap(cm_rf, annot=True, fmt='d', cmap='Blues', xticklabels=encoder.categories_[0], yticklabels=encoder.categories_[0])
+plt.title("Random Forest Confusion Matrix")
+plt.ylabel('Actual')
+plt.xlabel('Predicted')
+plt.show()
+
+# Confusion Matrix for SVM
+plt.figure(figsize=(8, 6))
+cm_svm = confusion_matrix(y_test_decoded, y_pred_svm)
+sns.heatmap(cm_svm, annot=True, fmt='d', cmap='Blues', xticklabels=encoder.categories_[0], yticklabels=encoder.categories_[0])
+plt.title("SVM Confusion Matrix")
+plt.ylabel('Actual')
+plt.xlabel('Predicted')
+plt.show()
